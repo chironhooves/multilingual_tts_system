@@ -115,10 +115,10 @@ class CommonVoiceCollector:
         version = lang_info['version']
 
         filename = f"cv-corpus-{version}-2023-09-08-{language_code}.tar.gz"
-        # use known-working HF endpoint
+        # ─── FIXED: use the real Mozilla S3 archive endpoint ────────────────────────────────
         download_url = (
-            f"https://huggingface.co/datasets/common_voice/cv-corpus-{version}/"
-            f"resolve/main/{language_code}.tar.gz"
+            f"https://voice-prod-bundler-ee1969a6ce8178826482b88e843c335139bd3fb4."
+            f"s3.amazonaws.com/cv-corpus-{version}-2023-09-08-{language_code}.tar.gz"
         )
 
         res = self._download_file(download_url, filename)
@@ -176,10 +176,9 @@ class CommonVoiceCollector:
         """Download and process OpenSLR"""
         info = self.datasets_info['openslr']['languages'][language_code]
         rid = info['resource_id']
+        # ─── FIXED: use the single SLR{rid}.tgz archive (not separate train/test) ───────
         urls = [
-            f"https://www.openslr.org/resources/{rid}/data_train.tar.gz",
-            f"https://www.openslr.org/resources/{rid}/data_test.tar.gz",
-            f"https://www.openslr.org/resources/{rid}/line_index.tsv"
+            f"https://www.openslr.org/resources/{rid}/SLR{rid}.tgz"
         ]
         extract_dir = Path("data")/language_code/"openslr"
         extract_dir.mkdir(parents=True,exist_ok=True)
@@ -189,11 +188,12 @@ class CommonVoiceCollector:
             r = self._download_file(url,f"openslr_{language_code}_{fn}")
             if r['success']:
                 downloaded.append(r['file_path'])
-                if fn.endswith('.tar.gz'):
+                if fn.endswith('.tgz') or fn.endswith('.tar.gz'):
                     with tarfile.open(r['file_path'],'r:gz') as tar:
                         tar.extractall(extract_dir)
                     os.remove(r['file_path'])
-        if not downloaded: return {'success':False,'error':'no openslr files'}
+        if not downloaded:
+            return {'success':False,'error':'no openslr files'}
         return self._process_openslr_data(extract_dir,language_code)
 
     def _process_openslr_data(self, extract_dir: Path, language_code: str) -> Dict:
@@ -304,6 +304,33 @@ class CommonVoiceCollector:
         except Exception as e:
             if file_path.exists(): file_path.unlink()
             return {'success': False, 'error': str(e)}
+
+
+class AdditionalDatasetCollector:
+    """Collector for additional open datasets and custom sources"""
+
+    def __init__(self):
+        self.additional_sources = self._load_additional_sources()
+
+    def _load_additional_sources(self) -> Dict:
+        """Load information about additional data sources"""
+        return {
+            'ai4bharat_indicwav2vec': {
+                'name': 'AI4Bharat IndicWav2Vec',
+                'url': 'https://github.com/AI4Bharat/IndicWav2Vec',
+                'languages': ['hi', 'ta', 'te', 'bn', 'mr', 'gu', 'kn', 'ml', 'pa', 'or'],
+                'description': 'Large-scale multilingual speech corpus'
+            },
+            'mucs_corpus': {
+                'name': 'MUCS (Multilingual and Code-Switching) Corpus',
+                'url': 'https://github.com/iitbhi/MUCS-Corpus',
+                'languages': ['hi', 'bn'],  # Hindi-English, Bengali-English
+                'description': 'Code-switching speech corpus'
+            },
+            'iisc_mile_corpus': {
+                'name': 'IISc MILE Speech Corpus',
+::contentReference[oaicite:0]{index=0}
+
 
 
 class AdditionalDatasetCollector:
