@@ -1,8 +1,3 @@
-"""
-Common Voice and Open Dataset Integration
-Handles downloading and processing of Mozilla Common Voice and other open datasets
-for Indian languages, replacing YouTube dependency
-"""
 
 import os
 import requests
@@ -17,28 +12,39 @@ from datetime import datetime
 import shutil
 from urllib.parse import urlparse
 
-from config.languages import IndianLanguages
-from config.settings import SystemSettings
+class IndianLanguages:
+    def get_supported_languages(self):
+        return {
+            'hi': {'name': 'Hindi', 'native': 'हिंदी'},
+            'ta': {'name': 'Tamil', 'native': 'தமிழ்'},
+            'te': {'name': 'Telugu', 'native': 'తెలుగు'},
+            'bn': {'name': 'Bengali', 'native': 'বাংলা'},
+            'mr': {'name': 'Marathi', 'native': 'मराठी'},
+            'gu': {'name': 'Gujarati', 'native': 'ગુજરાતી'},
+            'kn': {'name': 'Kannada', 'native': 'ಕನ್ನಡ'},
+            'ml': {'name': 'Malayalam', 'native': 'മലയാളം'},
+            'pa': {'name': 'Punjabi', 'native': 'ਪੰਜਾਬੀ'},
+            'or': {'name': 'Odia', 'native': 'ଓଡ଼ିଆ'}
+        }
+
+class SystemSettings:
+    def __init__(self):
+        self.DOWNLOAD_DIR = "temp/downloads"
 
 logger = logging.getLogger(__name__)
 
-
 class CommonVoiceCollector:
-    """Handles Common Voice dataset collection and processing"""
-
     def __init__(self):
         self.settings = SystemSettings()
         self.languages = IndianLanguages()
         self.datasets_info = self._load_datasets_info()
 
-        # Create downloads directory
         self.downloads_dir = Path("temp/downloads")
         self.downloads_dir.mkdir(parents=True, exist_ok=True)
 
         logger.info("🎙️ Common Voice Collector initialized")
 
     def _load_datasets_info(self) -> Dict:
-        """Load information about available open datasets"""
         return {
             'common_voice': {
                 'name': 'Mozilla Common Voice',
@@ -96,29 +102,33 @@ class CommonVoiceCollector:
         }
 
     def list_available_datasets(self, language_code: str = None) -> Dict:
-        """List all available datasets for a language (or all languages)"""
         available = {}
         for name, info in self.datasets_info.items():
             langs = info['languages']
             if language_code:
                 if langs.get(language_code, {}).get('available'):
-                    available[name] = info['name']
+                    available[name] = info
             else:
-                if any(l.get('available') for l in langs.values()):
-                    available[name] = info['name']
+                available_langs_for_dataset = {
+                    lang_code: lang_info for lang_code, lang_info in langs.items()
+                    if lang_info.get('available')
+                }
+                if available_langs_for_dataset:
+                    available[name] = {
+                        'name': info['name'],
+                        'languages': available_langs_for_dataset
+                    }
         return available
 
     def download_common_voice_dataset(self, language_code: str, subset: str = 'train') -> Dict:
-        """Download and extract Common Voice"""
         logger.info(f"📥 Downloading Common Voice for {language_code}")
         lang_info = self.datasets_info['common_voice']['languages'][language_code]
         version = lang_info['version']
 
         filename = f"cv-corpus-{version}-2023-09-08-{language_code}.tar.gz"
-        # ─── FIXED: use the real Mozilla S3 archive endpoint ────────────────────────────────
         download_url = (
             f"https://voice-prod-bundler-ee1969a6ce8178826482b88e843c335139bd3fb4."
-            f"s3.amazonaws.com/cv-corpus-{version}-2023-09-08-{language_code}.tar.gz"
+            f"s3.amazonaws.com/cv-corpus-{version}-2023-09-08/{language_code}.tar.gz"
         )
 
         res = self._download_file(download_url, filename)
@@ -131,7 +141,6 @@ class CommonVoiceCollector:
         return extract_res
 
     def _extract_common_voice_dataset(self, archive_path: str, language_code: str, subset: str) -> Dict:
-        """Extract and process Common Voice"""
         try:
             extract_dir = Path("data") / language_code / "common_voice"
             extract_dir.mkdir(parents=True, exist_ok=True)
@@ -145,7 +154,6 @@ class CommonVoiceCollector:
             return {'success': False, 'error': str(e)}
 
     def _process_common_voice_data(self, extract_dir: Path, language_code: str, subset: str) -> Dict:
-        """Process extracted Common Voice data"""
         tsvs = list(extract_dir.rglob(f"{subset}.tsv"))
         if not tsvs:
             return {'success': False, 'error': f"No {subset}.tsv found"}
@@ -162,7 +170,7 @@ class CommonVoiceCollector:
             tgt_audio = raw_audio / f"{language_code}_{idx:06d}.mp3"
             shutil.copy2(src, tgt_audio)
             data = {'text': row['sentence'], 'speaker_id': row.get('client_id', ''),
-                    'source':'common_voice','language':language_code}
+                            'source':'common_voice','language':language_code}
             tgt_txt = raw_text / f"{language_code}_{idx:06d}.json"
             with open(tgt_txt,'w',encoding='utf-8') as f: json.dump(data,f,ensure_ascii=False)
             count += 1
@@ -173,10 +181,8 @@ class CommonVoiceCollector:
         return {'success':True, 'segments':count, 'manifest_file':str(manifest)}
 
     def download_openslr_dataset(self, language_code: str) -> Dict:
-        """Download and process OpenSLR"""
         info = self.datasets_info['openslr']['languages'][language_code]
         rid = info['resource_id']
-        # ─── FIXED: use the single SLR{rid}.tgz archive (not separate train/test) ───────
         urls = [
             f"https://www.openslr.org/resources/{rid}/SLR{rid}.tgz"
         ]
@@ -197,7 +203,6 @@ class CommonVoiceCollector:
         return self._process_openslr_data(extract_dir,language_code)
 
     def _process_openslr_data(self, extract_dir: Path, language_code: str) -> Dict:
-        """Process OpenSLR files into raw_audio/raw_text"""
         tsv = extract_dir/"line_index.tsv"
         transcripts = {}
         if tsv.exists():
@@ -221,7 +226,6 @@ class CommonVoiceCollector:
         return {'success':True,'segments':count,'manifest_file':str(manifest)}
 
     def download_fleurs_dataset(self, language_code: str) -> Dict:
-        """Download and process Google FLEURS"""
         try:
             from datasets import load_dataset
         except ImportError:
@@ -246,7 +250,6 @@ class CommonVoiceCollector:
         return {'success':True,'segments':count,'manifest_file':str(m)}
 
     def download_indic_tts_dataset(self, language_code: str) -> Dict:
-        """Download and process AI4Bharat Indic-TTS from Hugging Face"""
         try:
             from datasets import load_dataset
         except ImportError:
@@ -270,50 +273,49 @@ class CommonVoiceCollector:
         return {'success':True,'segments':count,'manifest_file':str(m)}
 
     def collect_all_available_data(self, language_code: str) -> Dict:
-        """Collect data from all available sources for a language"""
         results = {'language_code':language_code,'results_by_dataset':{}}
-        for ds in self.list_available_datasets(language_code):
-            try:
-                if ds=='common_voice':
-                    r=self.download_common_voice_dataset(language_code)
-                elif ds=='openslr':
-                    r=self.download_openslr_dataset(language_code)
-                elif ds=='google_fleurs':
-                    r=self.download_fleurs_dataset(language_code)
-                elif ds=='indic_tts':
-                    r=self.download_indic_tts_dataset(language_code)
-                else:
-                    r={'success':False,'error':'not implemented'}
-            except Exception as e:
-                r={'success':False,'error':str(e)}
-            results['results_by_dataset'][ds]=r
+        for ds_key in self.datasets_info.keys():
+            if self.datasets_info[ds_key]['languages'].get(language_code, {}).get('available'):
+                try:
+                    if ds_key=='common_voice':
+                        r=self.download_common_voice_dataset(language_code)
+                    elif ds_key=='openslr':
+                        r=self.download_openslr_dataset(language_code)
+                    elif ds_key=='google_fleurs':
+                        r=self.download_fleurs_dataset(language_code)
+                    elif ds_key=='indic_tts':
+                        r=self.download_indic_tts_dataset(language_code)
+                    else:
+                        r={'success':False,'error':'not implemented'}
+                except Exception as e:
+                    r={'success':False,'error':str(e)}
+                results['results_by_dataset'][ds_key]=r
         return results
 
     def _download_file(self, url: str, filename: str, chunk_size: int = 8192) -> Dict:
-        """Download a file with progress tracking"""
         file_path = self.downloads_dir / filename
         try:
             if file_path.exists():
+                logger.info(f"File already exists: {file_path}. Skipping download.")
                 return {'success': True, 'file_path': str(file_path)}
             resp = requests.get(url, stream=True, timeout=30)
             resp.raise_for_status()
             with open(file_path, 'wb') as f:
                 for c in resp.iter_content(chunk_size):
                     f.write(c)
+            logger.info(f"Downloaded {filename} to {file_path}")
             return {'success': True, 'file_path': str(file_path)}
         except Exception as e:
-            if file_path.exists(): file_path.unlink()
+            logger.error(f"Error downloading {url}: {e}")
+            if file_path.exists():
+                file_path.unlink()
             return {'success': False, 'error': str(e)}
 
-
 class AdditionalDatasetCollector:
-    """Collector for additional open datasets and custom sources"""
-
     def __init__(self):
         self.additional_sources = self._load_additional_sources()
 
     def _load_additional_sources(self) -> Dict:
-        """Load information about additional data sources"""
         return {
             'ai4bharat_indicwav2vec': {
                 'name': 'AI4Bharat IndicWav2Vec',
@@ -324,34 +326,7 @@ class AdditionalDatasetCollector:
             'mucs_corpus': {
                 'name': 'MUCS (Multilingual and Code-Switching) Corpus',
                 'url': 'https://github.com/iitbhi/MUCS-Corpus',
-                'languages': ['hi', 'bn'],  # Hindi-English, Bengali-English
-                'description': 'Code-switching speech corpus'
-            },
-            'iisc_mile_corpus': {
-                'name': 'IISc MILE Speech Corpus',
-::contentReference[oaicite:0]{index=0}
-
-
-
-class AdditionalDatasetCollector:
-    """Collector for additional open datasets and custom sources"""
-
-    def __init__(self):
-        self.additional_sources = self._load_additional_sources()
-
-    def _load_additional_sources(self) -> Dict:
-        """Load information about additional data sources"""
-        return {
-            'ai4bharat_indicwav2vec': {
-                'name': 'AI4Bharat IndicWav2Vec',
-                'url': 'https://github.com/AI4Bharat/IndicWav2Vec',
-                'languages': ['hi', 'ta', 'te', 'bn', 'mr', 'gu', 'kn', 'ml', 'pa', 'or'],
-                'description': 'Large-scale multilingual speech corpus'
-            },
-            'mucs_corpus': {
-                'name': 'MUCS (Multilingual and Code-Switching) Corpus',
-                'url': 'https://github.com/iitbhi/MUCS-Corpus',
-                'languages': ['hi', 'bn'],  # Hindi-English, Bengali-English
+                'languages': ['hi', 'bn'],
                 'description': 'Code-switching speech corpus'
             },
             'iisc_mile_corpus': {
@@ -368,14 +343,12 @@ class AdditionalDatasetCollector:
         }
 
     def setup_custom_recording_interface(self, language_code: str) -> Dict:
-        """Setup interface for custom recordings"""
         logger.info(f"🎙️ Setting up custom recording interface for {language_code}")
 
         base_dir = Path("data") / language_code
         custom_dir = base_dir / "custom_recordings"
         custom_dir.mkdir(parents=True, exist_ok=True)
 
-        # Create templates for custom data
         templates = {
             'recording_template.json': {
                 'instructions': [
@@ -401,24 +374,22 @@ class AdditionalDatasetCollector:
 
 ## Quick Start
 1. Place audio files in `audio/` folder
-2. Place corresponding text files in `text/` folder  
+2. Place corresponding text files in `text/` folder
 3. Update the manifest.json with your recording details
 4. Run the system to process your custom data
 
 ## File Structure
-```
 custom_recordings/
 ├── audio/
-│   ├── recording_001.wav
-│   ├── recording_002.wav
-│   └── ...
+│   ├── recording_001.wav
+│   ├── recording_002.wav
+│   └── ...
 ├── text/
-│   ├── recording_001.txt
-│   ├── recording_002.txt
-│   └── ...
+│   ├── recording_001.txt
+│   ├── recording_002.txt
+│   └── ...
 ├── manifest.json
 └── README.md
-```
 
 ## Audio Requirements
 - Format: WAV (preferred), MP3, FLAC
@@ -437,11 +408,8 @@ custom_recordings/
 Your recordings will be automatically processed when you run:
 ```bash
 python main.py -> Option 3 -> Data Collection -> Custom Recordings
-```
 """
         }
-
-        # Create template files
         for filename, content in templates.items():
             file_path = custom_dir / filename
             if isinstance(content, dict):
@@ -451,7 +419,6 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
                 with open(file_path, 'w', encoding='utf-8') as f:
                     f.write(content)
 
-        # Create directories
         (custom_dir / 'audio').mkdir(exist_ok=True)
         (custom_dir / 'text').mkdir(exist_ok=True)
 
@@ -464,7 +431,6 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
         }
 
     def process_custom_recordings(self, language_code: str) -> Dict:
-        """Process user-provided custom recordings"""
         logger.info(f"🔄 Processing custom recordings for {language_code}")
 
         base_dir = Path("data") / language_code
@@ -479,7 +445,6 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
         if not audio_dir.exists() or not text_dir.exists():
             return {'success': False, 'error': 'Audio or text directories not found'}
 
-        # Find audio files
         audio_files = []
         for ext in ['.wav', '.mp3', '.flac', '.m4a']:
             audio_files.extend(audio_dir.glob(f'*{ext}'))
@@ -487,13 +452,11 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
         if not audio_files:
             return {'success': False, 'error': 'No audio files found'}
 
-        # Process each audio file
         processed_segments = []
         successful_processes = 0
 
         for audio_file in audio_files:
             try:
-                # Find corresponding text file
                 text_file = text_dir / f"{audio_file.stem}.txt"
                 if not text_file.exists():
                     text_file = text_dir / f"{audio_file.stem}.json"
@@ -502,7 +465,6 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
                     logger.warning(f"No text file found for {audio_file.name}")
                     continue
 
-                # Read text content
                 if text_file.suffix == '.json':
                     with open(text_file, 'r', encoding='utf-8') as f:
                         text_data = json.load(f)
@@ -515,11 +477,9 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
                     logger.warning(f"Empty text for {audio_file.name}")
                     continue
 
-                # Copy to our standard format
                 target_audio = base_dir / "raw_audio" / f"custom_{audio_file.name}"
                 target_audio.parent.mkdir(exist_ok=True)
 
-                # Convert audio to standard format if needed
                 if audio_file.suffix != '.wav':
                     self._convert_audio_to_wav(audio_file, target_audio.with_suffix('.wav'))
                     target_audio = target_audio.with_suffix('.wav')
@@ -527,7 +487,6 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
                     import shutil
                     shutil.copy2(audio_file, target_audio)
 
-                # Create metadata
                 segment_data = {
                     'audio_file': str(target_audio),
                     'text': text_content,
@@ -544,7 +503,6 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
                 logger.error(f"Error processing {audio_file}: {e}")
 
         if processed_segments:
-            # Save manifest
             manifest_file = base_dir / "metadata" / f"custom_recordings_manifest_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
             manifest_file.parent.mkdir(exist_ok=True)
 
@@ -568,39 +526,28 @@ python main.py -> Option 3 -> Data Collection -> Custom Recordings
             return {'success': False, 'error': 'No recordings could be processed'}
 
     def _convert_audio_to_wav(self, input_file: Path, output_file: Path):
-        """Convert audio file to WAV format"""
         try:
             import librosa
             import soundfile as sf
 
-            # Load audio
             audio, sr = librosa.load(input_file, sr=16000, mono=True)
 
-            # Save as WAV
             sf.write(output_file, audio, sr)
 
         except Exception as e:
             logger.error(f"Audio conversion failed: {e}")
-            # Fallback: copy original file
             import shutil
             shutil.copy2(input_file, output_file)
 
-
 def main():
-    """Test the Common Voice collector"""
     collector = CommonVoiceCollector()
-
-    # Show available datasets
     available = collector.list_available_datasets()
     print("Available datasets:")
-    for dataset, info in available.items():
-        print(f"  {dataset}: {info['name']}")
-        print(f"    Languages: {list(info['languages'].keys())}")
-
-    # Test download for Hindi
-    # result = collector.download_common_voice_dataset('hi')
-    # print(f"Download result: {result}")
-
+    for dataset_key, info in available.items():
+        print(f"  {dataset_key}: {info['name']}")
+        print(f"    Available Languages (Code: Name):")
+        for lang_code, lang_info in info['languages'].items():
+            print(f"      - {lang_code}: {lang_info['name']}")
 
 if __name__ == "__main__":
     main()
